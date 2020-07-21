@@ -14,13 +14,15 @@ class ReplayBuffer(object):
     def push(self, *args):
         """Saves a transition."""
         # TODO
-        raise NotImplementedError
-
+        self.memory.append(Transition(*args))
+        if len(self) > self.capacity:
+            self.memory.pop(0)
+        # raise NotImplementedError
 
     def sample(self, batch_size):
         # TODO
-        raise NotImplementedError
-
+        return random.sample(self.memory, batch_size)
+        # raise NotImplementedError
 
     def __len__(self):
         return len(self.memory)

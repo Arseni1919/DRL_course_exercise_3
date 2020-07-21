@@ -51,6 +51,8 @@ params = box.Box(training_params)
 
 # Build neural networks
 policy_net = Network(network_params, device).to(device)
+target_net = Network(network_params, device).to(device)
+target_net.load_state_dict(policy_net.state_dict())
 # TODO: build the target network and set its weights to policy_net's wights (use state_dict from pytorch)
 
 
@@ -80,7 +82,10 @@ def select_action(s):
     '''
     # TODO: implement action selection.
     global epsilon
-    raise NotImplementedError
+    curr_action = torch.argmax(policy_net(s)).detach()
+    if random.random() < epsilon:
+        curr_action = random.randint(0,1)
+    return torch.tensor([[curr_action]], device=device, dtype=torch.long)
 
 
 def train_model():
@@ -99,20 +104,27 @@ def train_model():
     action_batch = torch.cat(batch.action)
     next_states_batch = torch.cat(batch.next_state)
     reward_batch = torch.cat(batch.reward)
-    not_done_batch = torch.cat(batch.not_done)
+    # not_done_batch = torch.cat(batch.not_done)
+    not_done_batch = batch.not_done
 
     # Compute curr_Q = Q(s, a) - the model computes Q(s), then we select the columns of the taken actions.
     # Pros tips: First pass all s_batch through the network
     #            and then choose the relevant action for each state using the method 'gather'
     # TODO: fill curr_Q
-    curr_Q = None
+    output_of_net = policy_net(state_batch)
+    curr_Q = torch.gather(output_of_net, 1, action_batch)
 
     # Compute expected_Q (target value) for all states.
     # Don't forget that for terminal states we don't add the value of the next state.
     # Pros tips: Calculate the values for all next states ( Q_(s', max_a(Q_(s')) )
     #            and then mask next state's value with 0, where not_done is False (i.e., done).
     # TODO: fill expected_Q
-    expected_Q = None
+    # output_of_net = target_net(next_states_batch)
+    # Qs_of_best_actions = torch.gather(output_of_net, 1, torch.argmax(output_of_net))
+    Qs_of_best_actions = target_net(next_states_batch).max(1)[0]
+    Qs_of_best_actions[not not_done_batch] = 0.0
+    Qs_of_best_actions = Qs_of_best_actions.detach()
+    expected_Q = Qs_of_best_actions * params.gamma + reward_batch
 
     # Compute Huber loss. Smoother than MSE
     loss = F.smooth_l1_loss(curr_Q, expected_Q)
@@ -208,8 +220,12 @@ for i_episode in range(max_episodes):
 
         # soft target update
         if params.target_update == 'soft':
+            # 0' ← τθ + (1 − τ )θ'
             # TODO: Implement soft target update.
-            raise NotImplementedError
+            tau = 0.01
+            for target_param, policy_param in zip(target_net.parameters(), policy_net.parameters()):
+                target_param.data.copy_(tau * policy_param.data + (1 - tau) * target_param.data)
+            # raise NotImplementedError
 
         if done or t >= max_score:
             print("Episode: {} | Current target score {} | Score: {}".format(i_episode+1, task_score, score))
@@ -228,7 +244,9 @@ for i_episode in range(max_episodes):
     if params.target_update == 'hard':
         # TODO: Implement hard target update.
         # Copy the weights from policy_net to target_net after every x episodes
-        raise NotImplementedError
+        if i_episode % 15 == 0:
+            target_net.load_state_dict(policy_net.state_dict())
+        # raise NotImplementedError
 
     # update task score
     if min(all_scores[-5:]) > task_score:
