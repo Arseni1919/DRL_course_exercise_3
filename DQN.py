@@ -106,13 +106,16 @@ def train_model():
     reward_batch = torch.cat(batch.reward)
     # not_done_batch = torch.cat(batch.not_done)
     not_done_batch = batch.not_done
+    done_mask = torch.BoolTensor(batch.not_done).to(device)
 
     # Compute curr_Q = Q(s, a) - the model computes Q(s), then we select the columns of the taken actions.
     # Pros tips: First pass all s_batch through the network
     #            and then choose the relevant action for each state using the method 'gather'
     # TODO: fill curr_Q
-    output_of_net = policy_net(state_batch)
-    curr_Q = torch.gather(output_of_net, 1, action_batch)
+    # output_of_net = policy_net(state_batch)
+    # curr_Q = torch.gather(output_of_net, 1, action_batch)
+    curr_Q = policy_net(state_batch).gather(1, action_batch)
+    curr_Q = policy_net(state_batch).gather(1, action_batch).squeeze(-1)
 
     # Compute expected_Q (target value) for all states.
     # Don't forget that for terminal states we don't add the value of the next state.
@@ -121,10 +124,18 @@ def train_model():
     # TODO: fill expected_Q
     # output_of_net = target_net(next_states_batch)
     # Qs_of_best_actions = torch.gather(output_of_net, 1, torch.argmax(output_of_net))
-    Qs_of_best_actions = target_net(next_states_batch).max(1)[0]
-    Qs_of_best_actions[not not_done_batch] = 0.0
-    Qs_of_best_actions = Qs_of_best_actions.detach()
-    expected_Q = Qs_of_best_actions * params.gamma + reward_batch
+    # Qs_of_best_actions = target_net(next_states_batch).max(1)[0]
+    #
+    # Qs_of_best_actions[not not_done_batch] = 0.0
+    # Qs_of_best_actions = Qs_of_best_actions.detach()
+    # expected_Q = Qs_of_best_actions * params.gamma + reward_batch
+
+    # next_state_values = torch.zeros(len(batch.next_state), device=device)
+    next_state_values = target_net(next_states_batch).max(1)[0].detach()
+    done_mask = ~done_mask
+    next_state_values[done_mask] = 0.0
+    # Compute the expected Q values
+    expected_Q = (next_state_values * params.gamma) + reward_batch
 
     # Compute Huber loss. Smoother than MSE
     loss = F.smooth_l1_loss(curr_Q, expected_Q)
@@ -180,6 +191,7 @@ def cartpole_play():
 # ============================================================================
 # Training loop
 max_episodes = 200
+# max_episodes = 2
 max_score = 500
 task_score = 0
 # performances plots
@@ -252,9 +264,31 @@ for i_episode in range(max_episodes):
     if min(all_scores[-5:]) > task_score:
         task_score = min(all_scores[-5:])
         # TODO: store weights
+        torch.save(policy_net.state_dict(), 'best.dat')
 
 print('------------------------------------------------------------------------------')
 print('Final task score = ', task_score)
 
 plt.ioff()
 plt.show()
+
+cartpole_play()
+
+# final_net = Network(network_params, device).to(device)
+# final_net.load_state_dict(torch.load('best.dat'))
+# final_net.eval()
+#
+# obs = env.reset()
+# done = False
+# for i in range(30000):
+#
+#     q_values = final_net(torch.tensor([obs]))
+#     _, action = torch.max(q_values, dim=1)
+#     action = int(action.item())
+#
+#     obs, rew, done, info = env.step(action)
+#     env.render()
+#     # print(rew)
+#     if done:
+#         obs = env.reset()
+# env.close()

@@ -15,7 +15,7 @@ class ReplayBuffer(object):
         """Saves a transition."""
         # TODO
         self.memory.append(Transition(*args))
-        if len(self) > self.capacity:
+        if len(self.memory) > self.capacity:
             self.memory.pop(0)
         # raise NotImplementedError
 

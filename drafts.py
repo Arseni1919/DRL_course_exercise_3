@@ -16,3 +16,10 @@ print(l)
 # for t in itertools.count():
 #     print(t)
 #     time.sleep(1)
+
+# # SAVE
+# torch.save(model.state_dict(), PATH)
+# # LOAD
+# model = TheModelClass(*args, **kwargs)
+# model.load_state_dict(torch.load(PATH))
+# model.eval()
