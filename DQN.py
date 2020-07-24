@@ -28,6 +28,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # ============================================================================
 # Parameters
+
+name_of_weights_to_save_and_load = 'best.dat'
+
 network_params = {
     'state_dim': env.observation_space.shape[0],
     'action_dim': env.action_space.n,
@@ -36,6 +39,7 @@ network_params = {
 
 training_params = {
     'batch_size': 256,
+    # 'batch_size': 1,
     'gamma': 0.95,
     'epsilon_start': 1.1,
     'epsilon_end': 0.05,
@@ -51,13 +55,15 @@ params = box.Box(training_params)
 
 # Build neural networks
 policy_net = Network(network_params, device).to(device)
+# TODO: build the target network and set its weights to policy_net's wights (use state_dict from pytorch)
 target_net = Network(network_params, device).to(device)
 target_net.load_state_dict(policy_net.state_dict())
-# TODO: build the target network and set its weights to policy_net's wights (use state_dict from pytorch)
+
 
 
 optimizer = optim.Adam(policy_net.parameters())
 buffer = ReplayBuffer(100000)
+# buffer = ReplayBuffer(1)
 epsilon = params.epsilon_start
 
 
@@ -105,16 +111,12 @@ def train_model():
     next_states_batch = torch.cat(batch.next_state)
     reward_batch = torch.cat(batch.reward)
     # not_done_batch = torch.cat(batch.not_done)
-    not_done_batch = batch.not_done
     done_mask = torch.BoolTensor(batch.not_done).to(device)
 
     # Compute curr_Q = Q(s, a) - the model computes Q(s), then we select the columns of the taken actions.
     # Pros tips: First pass all s_batch through the network
     #            and then choose the relevant action for each state using the method 'gather'
     # TODO: fill curr_Q
-    # output_of_net = policy_net(state_batch)
-    # curr_Q = torch.gather(output_of_net, 1, action_batch)
-    curr_Q = policy_net(state_batch).gather(1, action_batch)
     curr_Q = policy_net(state_batch).gather(1, action_batch).squeeze(-1)
 
     # Compute expected_Q (target value) for all states.
@@ -122,18 +124,13 @@ def train_model():
     # Pros tips: Calculate the values for all next states ( Q_(s', max_a(Q_(s')) )
     #            and then mask next state's value with 0, where not_done is False (i.e., done).
     # TODO: fill expected_Q
-    # output_of_net = target_net(next_states_batch)
-    # Qs_of_best_actions = torch.gather(output_of_net, 1, torch.argmax(output_of_net))
-    # Qs_of_best_actions = target_net(next_states_batch).max(1)[0]
-    #
-    # Qs_of_best_actions[not not_done_batch] = 0.0
-    # Qs_of_best_actions = Qs_of_best_actions.detach()
-    # expected_Q = Qs_of_best_actions * params.gamma + reward_batch
-
-    # next_state_values = torch.zeros(len(batch.next_state), device=device)
+    # --------------------------------------------------------------------------------target_net ⬇︎
     next_state_values = target_net(next_states_batch).max(1)[0].detach()
+    # next_state_values = policy_net(next_states_batch).max(1)[0].detach()
+    # --------------------------------------------------------------------------------target_net ⬆︎
     done_mask = ~done_mask
     next_state_values[done_mask] = 0.0
+
     # Compute the expected Q values
     expected_Q = (next_state_values * params.gamma) + reward_batch
 
@@ -151,8 +148,9 @@ def train_model():
 
     return loss.item(), estimation_diff
 
+
 # ============================================================================
-def cartpole_play():
+def cartpole_play(to_load):
 
     FPS = 25
     visualize = 'True'
@@ -161,7 +159,7 @@ def cartpole_play():
     env = gym.wrappers.Monitor(env,'recording',force=True)
     net = Network(network_params, device).to(device)
     print('load best model ...')
-    net.load_state_dict(torch.load('best.dat'))
+    net.load_state_dict(torch.load(to_load))
 
     print('make movie ...')
     state = env.reset()
@@ -187,108 +185,101 @@ def cartpole_play():
     print("Total reward: %.2f" % total_reward)
     print("Action counts:", c)
     env.close()
+    return total_reward
 
-# ============================================================================
-# Training loop
-max_episodes = 200
-# max_episodes = 2
-max_score = 500
-task_score = 0
-# performances plots
-all_scores = []
-all_losses = []
-all_errors = []
-fig, axes = plt.subplots(3, 1)
 
-# train for max_episodes
-for i_episode in range(max_episodes):
-    epsilon = max(epsilon*params.epsilon_decay, params.epsilon_end)
-    ep_loss = []
-    ep_error = []
-    # Initialize the environment and state
-    state = torch.tensor([env.reset()], device=device).float()
-    done = False
-    score = 0
-    for t in count():
-        # Select and perform an action
-        action = select_action(state)
-        next_state, reward, done, _ = env.step(action.item())
-        score += reward
+if __name__ == '__main__':
 
-        next_state = torch.tensor([next_state], device=device).float()
-        reward = torch.tensor([reward], device=device).float()
-        # Store the transition in memory
-        buffer.push(state, action, next_state, reward, not done)
+    # ============================================================================
+    # Training loop
+    max_episodes = 200
+    # max_episodes = 2
+    max_score = 500
+    task_score = 0
+    # performances plots
+    all_scores = []
+    all_losses = []
+    all_errors = []
+    fig, axes = plt.subplots(3, 1)
 
-        # Update state
-        state = next_state
+    # train for max_episodes
+    for i_episode in range(max_episodes):
+        epsilon = max(epsilon*params.epsilon_decay, params.epsilon_end)
+        ep_loss = []
+        ep_error = []
+        # Initialize the environment and state
+        state = torch.tensor([env.reset()], device=device).float()
+        done = False
+        score = 0
+        for t in count():
+            # Select and perform an action
+            action = select_action(state)
+            next_state, reward, done, _ = env.step(action.item())
+            score += reward
 
-        # Perform one optimization step (on the policy network)
-        loss, Q_estimation_error = train_model()
+            next_state = torch.tensor([next_state], device=device).float()
+            reward = torch.tensor([reward], device=device).float()
+            # Store the transition in memory
+            buffer.push(state, action, next_state, reward, not done)
 
-        # save results
-        ep_loss.append(loss)
-        ep_error.append(Q_estimation_error)
+            # Update state
+            state = next_state
 
-        # soft target update
-        if params.target_update == 'soft':
-            # 0' ← τθ + (1 − τ )θ'
-            # TODO: Implement soft target update.
-            tau = 0.01
-            for target_param, policy_param in zip(target_net.parameters(), policy_net.parameters()):
-                target_param.data.copy_(tau * policy_param.data + (1 - tau) * target_param.data)
+            # Perform one optimization step (on the policy network)
+            loss, Q_estimation_error = train_model()
+
+            # save results
+            ep_loss.append(loss)
+            ep_error.append(Q_estimation_error)
+
+            # soft target update
+            if params.target_update == 'soft':
+                # print('in soft')
+                # 0' ← τθ + (1 − τ )θ'
+                # TODO: Implement soft target update.
+                tau = 0.01
+                for target_param, policy_param in zip(target_net.parameters(), policy_net.parameters()):
+                    target_param.data.copy_(tau * policy_param.data + (1 - tau) * target_param.data)
+                # raise NotImplementedError
+
+            if done or t >= max_score:
+                print("Episode: {} | Current target score {} | Score: {}".format(i_episode+1, task_score, score))
+                break
+
+        # plot results
+        all_scores.append(score)
+        all_losses.append(np.average(ep_loss))
+        all_errors.append(np.average(ep_error))
+        plot_graphs(all_scores, all_losses, all_errors, axes)
+        fig.canvas.draw()
+        fig.canvas.flush_events()
+        plt.pause(0.0001)
+
+        # hard target update. Copying all weights and biases in DQN
+        if params.target_update == 'hard':
+            # print('in hard')
+            # TODO: Implement hard target update.
+            # Copy the weights from policy_net to target_net after every x episodes
+            if i_episode % 15 == 0:
+                target_net.load_state_dict(policy_net.state_dict())
             # raise NotImplementedError
 
-        if done or t >= max_score:
-            print("Episode: {} | Current target score {} | Score: {}".format(i_episode+1, task_score, score))
-            break
+        # update task score
+        if min(all_scores[-5:]) > task_score:
+            task_score = min(all_scores[-5:])
+            # TODO: store weights
+            torch.save(policy_net.state_dict(), name_of_weights_to_save_and_load)
 
-    # plot results
-    all_scores.append(score)
-    all_losses.append(np.average(ep_loss))
-    all_errors.append(np.average(ep_error))
-    plot_graphs(all_scores, all_losses, all_errors, axes)
-    fig.canvas.draw()
-    fig.canvas.flush_events()
-    plt.pause(0.0001)
+    print('------------------------------------------------------------------------------')
+    print('Final task score = ', task_score)
 
-    # hard target update. Copying all weights and biases in DQN
-    if params.target_update == 'hard':
-        # TODO: Implement hard target update.
-        # Copy the weights from policy_net to target_net after every x episodes
-        if i_episode % 15 == 0:
-            target_net.load_state_dict(policy_net.state_dict())
-        # raise NotImplementedError
+    plt.ioff()
+    plt.show()
 
-    # update task score
-    if min(all_scores[-5:]) > task_score:
-        task_score = min(all_scores[-5:])
-        # TODO: store weights
-        torch.save(policy_net.state_dict(), 'best.dat')
+    total_rewards = []
+    for i in range(5):
+        total_reward = cartpole_play(name_of_weights_to_save_and_load)
+        total_rewards.append(total_reward)
+    print('#' * 80)
+    print(f'Average: {np.mean(total_rewards)}')
 
-print('------------------------------------------------------------------------------')
-print('Final task score = ', task_score)
-
-plt.ioff()
-plt.show()
-
-cartpole_play()
-
-# final_net = Network(network_params, device).to(device)
-# final_net.load_state_dict(torch.load('best.dat'))
-# final_net.eval()
-#
-# obs = env.reset()
-# done = False
-# for i in range(30000):
-#
-#     q_values = final_net(torch.tensor([obs]))
-#     _, action = torch.max(q_values, dim=1)
-#     action = int(action.item())
-#
-#     obs, rew, done, info = env.step(action)
-#     env.render()
-#     # print(rew)
-#     if done:
-#         obs = env.reset()
-# env.close()
